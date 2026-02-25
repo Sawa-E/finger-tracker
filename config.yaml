@@ -1,0 +1,32 @@
+# finger-tracker 設定ファイル（ADR 006）
+
+camera:
+  width: 1280
+  height: 720
+  fps: 30
+
+model:
+  path: models/best.pt
+  confidence: 0.5
+
+hsv:
+  red:
+    lower: [0, 120, 70]
+    upper: [10, 255, 255]
+    lower2: [170, 120, 70]
+    upper2: [180, 255, 255]
+  blue:
+    lower: [100, 120, 70]
+    upper: [130, 255, 255]
+
+filter:
+  kalman_q: 0.01
+  kalman_r: 0.1
+  depth_timeout: 0.5
+
+display:
+  fps_target: 30
+
+capture:
+  output_dir: data/images
+  prefix: frame

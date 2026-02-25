@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# データ・モデル・ログ（ADR 009）
+data/
+models/
+logs/
+runs/
