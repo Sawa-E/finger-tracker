@@ -46,9 +46,18 @@ def load_config(path: Path | None = None) -> dict:
     """
     config_path = path or _DEFAULT_CONFIG_PATH
 
-    if config_path.exists():
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"ERROR: config.yaml が見つかりません: {config_path}\n"
+            "  プロジェクトルートに config.yaml を配置してください。"
+        )
+
+    try:
         with open(config_path) as f:
             user_config = yaml.safe_load(f) or {}
-        return _deep_merge(_DEFAULTS, user_config)
+    except yaml.YAMLError as e:
+        raise ValueError(
+            f"ERROR: config.yaml の解析に失敗: {e}"
+        ) from e
 
-    return _DEFAULTS.copy()
+    return _deep_merge(_DEFAULTS, user_config)
