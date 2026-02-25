@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 .venv/
 
+# ローカルメモ
+setup_memo.md
+
 # データ・モデル・ログ（ADR 009）
 data/
 models/
