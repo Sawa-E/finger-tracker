@@ -114,21 +114,19 @@ def _get_depth(depth_frame, mask: np.ndarray, cx: int, cy: int,
     """
     now = time.monotonic()
 
-    # 1. マスク重心の深度
+    # 1. マスク内有効ピクセルの中央値（ノイズ耐性を優先）
+    ys, xs = np.where(mask > 0)
+    if len(ys) > 0:
+        vals = np.array([depth_frame.get_distance(x1 + int(mx), y1 + int(my))
+                         for my, mx in zip(ys, xs)])
+        valid = vals[vals > 0]
+        if len(valid) > 0:
+            return float(np.median(valid)), now
+
+    # 2. マスク重心の深度（マスク内で有効値がない場合のフォールバック）
     d = depth_frame.get_distance(cx, cy)
     if d > 0:
         return d, now
-
-    # 2. マスク内有効ピクセルの中央値
-    mask_pixels = np.where(mask > 0)
-    if len(mask_pixels[0]) > 0:
-        depths = []
-        for my, mx in zip(mask_pixels[0], mask_pixels[1]):
-            val = depth_frame.get_distance(x1 + mx, y1 + my)
-            if val > 0:
-                depths.append(val)
-        if depths:
-            return float(np.median(depths)), now
 
     # 3. BB 内全体で有効ピクセル探索
     bb_depths = []
@@ -158,7 +156,8 @@ def _process_detection(box, class_name: str, color_image: np.ndarray,
     """1つの検出結果から 3D 座標を取得する。
 
     Returns:
-        (point_3d, conf) — point_3d は [x,y,z] (meters) or None。
+        (point_3d, conf, pixel) — point_3d は [x,y,z] (meters) or None。
+            pixel は (cx, cy) マスク重心ピクセル座標 or None。
     """
     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
     conf = float(box.conf[0])
@@ -169,7 +168,7 @@ def _process_detection(box, class_name: str, color_image: np.ndarray,
     x2, y2 = min(w, x2), min(h, y2)
 
     if x2 <= x1 or y2 <= y1:
-        return None, conf
+        return None, conf, None
 
     # HSV フィルタ → マスク重心
     roi = color_image[y1:y2, x1:x2]
@@ -178,7 +177,7 @@ def _process_detection(box, class_name: str, color_image: np.ndarray,
     centroid = _mask_centroid(mask)
 
     if centroid is None:
-        return None, conf
+        return None, conf, None
 
     cx_local, cy_local = centroid
     cx, cy = x1 + cx_local, y1 + cy_local
@@ -193,11 +192,11 @@ def _process_detection(box, class_name: str, color_image: np.ndarray,
     last_depth_times[class_name] = dep_time
 
     if depth <= 0:
-        return None, conf
+        return None, conf, (cx, cy)
 
     # 3D 座標変換
     point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [cx, cy], depth)
-    return np.array(point_3d), conf
+    return np.array(point_3d), conf, (cx, cy)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +212,7 @@ _GREEN = (0, 255, 0)
 def _draw_overlay(image: np.ndarray, results, fps: float,
                   distance_mm: float | None,
                   red_conf: float | None, blue_conf: float | None,
-                  filtered_positions: dict):
+                  centroid_pixels: dict):
     """BB、距離線、ステータス情報を描画する。"""
     h, w = image.shape[:2]
 
@@ -226,25 +225,15 @@ def _draw_overlay(image: np.ndarray, results, fps: float,
             color = _RED_COLOR if cls_name == "red_finger" else _BLUE_COLOR
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
 
-    # 距離線（両方検出時）
-    red_pos = filtered_positions.get("red_finger")
-    blue_pos = filtered_positions.get("blue_finger")
-    if results and len(results) > 0 and red_pos is not None and blue_pos is not None:
-        red_box = blue_box = None
-        for box in results[0].boxes:
-            cls_name = results[0].names[int(box.cls[0])]
-            bx1, by1, bx2, by2 = map(int, box.xyxy[0].tolist())
-            center = ((bx1 + bx2) // 2, (by1 + by2) // 2)
-            if cls_name == "red_finger":
-                red_box = center
-            elif cls_name == "blue_finger":
-                blue_box = center
-        if red_box and blue_box:
-            cv2.line(image, red_box, blue_box, _GREEN, 2)
-            mid = ((red_box[0] + blue_box[0]) // 2, (red_box[1] + blue_box[1]) // 2 - 10)
-            if distance_mm is not None:
-                cv2.putText(image, f"{distance_mm:.1f}mm", mid,
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, _GREEN, 2)
+    # 距離線（両方のマスク重心が取得できている時）
+    red_px = centroid_pixels.get("red_finger")
+    blue_px = centroid_pixels.get("blue_finger")
+    if red_px is not None and blue_px is not None:
+        cv2.line(image, red_px, blue_px, _GREEN, 2)
+        mid = ((red_px[0] + blue_px[0]) // 2, (red_px[1] + blue_px[1]) // 2 - 10)
+        if distance_mm is not None:
+            cv2.putText(image, f"{distance_mm:.1f}mm", mid,
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, _GREEN, 2)
 
     # 上部: FPS + Conf
     conf_text = "Conf: "
@@ -423,7 +412,7 @@ def run():
             # 各指の処理
             red_pos = blue_pos = None
             red_conf = blue_conf = None
-            filtered_positions: dict[str, np.ndarray | None] = {}
+            centroid_pixels: dict[str, tuple[int, int] | None] = {}
 
             # 検出結果をクラス名でマッピング
             detected: dict[str, object] = {}
@@ -439,7 +428,7 @@ def run():
 
                 if cls_name in detected:
                     box = detected[cls_name]
-                    point_3d, conf = _process_detection(
+                    point_3d, conf, pixel = _process_detection(
                         box, cls_name, color_image, depth_frame, intrinsics,
                         hsv_config, flt["depth_timeout"],
                         last_depths, last_depth_times,
@@ -449,6 +438,7 @@ def run():
                         kf.update(point_3d)
 
                     pos = kf.get_position() if kf._initialized else None
+                    centroid_pixels[cls_name] = pixel
 
                     if cls_name == "red_finger":
                         red_pos = pos
@@ -465,9 +455,6 @@ def run():
                         else:
                             blue_pos = pos
 
-            filtered_positions["red_finger"] = red_pos
-            filtered_positions["blue_finger"] = blue_pos
-
             # 距離計算
             distance_mm = None
             if red_pos is not None and blue_pos is not None:
@@ -480,7 +467,7 @@ def run():
 
             # 描画
             _draw_overlay(color_image, results, fps, distance_mm,
-                          red_conf, blue_conf, filtered_positions)
+                          red_conf, blue_conf, centroid_pixels)
             cv2.imshow("Detection", color_image)
 
             # CSV
