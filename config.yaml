@@ -30,3 +30,11 @@ display:
 capture:
   output_dir: data/images
   prefix: frame
+
+training:
+  dataset: data/datasets/finger-cots-v1/data.yaml
+  epochs: 100
+  patience: 50
+  batch: 16
+  imgsz: 640
+  base_model: yolov8n.pt

@@ -3,6 +3,17 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+dist/
+build/
+*.pt
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # ローカルメモ
 setup_memo.md

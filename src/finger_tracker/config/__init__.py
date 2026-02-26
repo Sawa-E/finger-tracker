@@ -21,6 +21,14 @@ _DEFAULTS = {
     "filter": {"kalman_q": 0.01, "kalman_r": 0.1, "depth_timeout": 0.5},
     "display": {"fps_target": 30},
     "capture": {"output_dir": "data/images", "prefix": "frame"},
+    "training": {
+        "dataset": "data/datasets/finger-cots-v1/data.yaml",
+        "epochs": 100,
+        "patience": 50,
+        "batch": 16,
+        "imgsz": 640,
+        "base_model": "yolov8n.pt",
+    },
 }
 
 
