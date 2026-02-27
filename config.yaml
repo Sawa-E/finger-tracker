@@ -24,6 +24,11 @@ filter:
   kalman_r: 0.1
   depth_timeout: 0.5
 
+udp:
+  host: "127.0.0.1"
+  port: 50000
+  enabled: true
+
 display:
   fps_target: 30
 

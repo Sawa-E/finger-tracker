@@ -3,7 +3,7 @@
 対象: Phase 1 — config + capture モジュール実装
 作成日: 2026-02-26
 更新日: 2026-02-26
-ステータス: active
+ステータス: resolved
 優先度: 高
 担当: AIエージェント
 -->
@@ -23,10 +23,10 @@
 
 ## ゴール
 
-- [ ] `python -m finger_tracker.config` で設定内容を確認できる
-- [ ] `python -m finger_tracker.capture` で RealSense から RGB+深度画像を取得・保存できる
-- [ ] `data/images/` に `frame_001_rgb.png` + `frame_001_depth.npy` のペアが保存される
-- [ ] Roboflow アップロード可能な RGB 画像が得られる
+- [x] `python -m finger_tracker.config` で設定内容を確認できる
+- [x] `python -m finger_tracker.capture` で RealSense から RGB+深度画像を取得・保存できる
+- [x] `data/images/` に `frame_001_rgb.png` + `frame_001_depth.npy` のペアが保存される
+- [x] Roboflow アップロード可能な RGB 画像が得られる
 
 ## スコープ
 
@@ -64,7 +64,7 @@
 
 **依存**: なし（最初に実行）
 
-- [ ] 完了
+- [x] 完了
 
 ### #001-02: config モジュール実装
 
@@ -81,7 +81,7 @@
 
 **依存**: #001-01
 
-- [ ] 完了
+- [x] 完了
 
 ### #001-03: capture モジュール実装
 
@@ -103,7 +103,7 @@
 
 **依存**: #001-02
 
-- [ ] 完了
+- [x] 完了
 
 ### #001-04: 動作確認
 
@@ -115,7 +115,7 @@
 
 **依存**: #001-03
 
-- [ ] 完了
+- [x] 完了
 
 ## リスク
 

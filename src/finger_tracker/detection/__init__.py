@@ -1,7 +1,9 @@
-"""リアルタイム指間距離計測モジュール（ADR 002, 005, 007, 008）"""
+"""リアルタイム指間距離計測モジュール（ADR 002, 005, 007, 008, 010）"""
 
 import csv
 import logging
+import socket
+import struct
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -295,6 +297,29 @@ def _write_csv_row(writer, distance_mm: float | None,
 
 
 # ---------------------------------------------------------------------------
+# UDP 送信（ADR 010）
+# ---------------------------------------------------------------------------
+
+_UDP_FORMAT = "<7f"  # リトルエンディアン float32 × 7 = 28 bytes
+_UDP_INVALID = struct.pack(_UDP_FORMAT, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
+def _send_udp(sock: socket.socket, dest: tuple,
+              distance_mm: float | None,
+              red_pos: np.ndarray | None,
+              blue_pos: np.ndarray | None):
+    """計測データを UDP パケットとして送信する。"""
+    if distance_mm is not None and red_pos is not None and blue_pos is not None:
+        packet = struct.pack(_UDP_FORMAT, distance_mm, *red_pos, *blue_pos)
+    else:
+        packet = _UDP_INVALID
+    try:
+        sock.sendto(packet, dest)
+    except OSError as e:
+        logger.debug("UDP 送信エラー: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # ログ設定（ADR 007）
 # ---------------------------------------------------------------------------
 
@@ -376,6 +401,19 @@ def run():
 
     # CSV
     csv_file, csv_writer = _open_csv(session_time)
+
+    # UDP（ADR 010）
+    udp_cfg = config.get("udp", {})
+    udp_enabled = udp_cfg.get("enabled", True)
+    udp_sock = None
+    udp_dest = None
+    if udp_enabled:
+        try:
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_dest = (udp_cfg.get("host", "127.0.0.1"), udp_cfg.get("port", 50000))
+            logger.info("UDP 送信有効: %s:%d", udp_dest[0], udp_dest[1])
+        except OSError as e:
+            logger.warning("UDP ソケット作成失敗（送信無効）: %s", e)
 
     logger.info("計測開始 — camera: %dx%d@%dfps", cam["width"], cam["height"], cam["fps"])
     print("計測開始 — q/ESC で終了")
@@ -474,6 +512,10 @@ def run():
             _write_csv_row(csv_writer, distance_mm, red_pos, blue_pos,
                            red_conf, blue_conf)
 
+            # UDP（ADR 010）
+            if udp_sock is not None and udp_dest is not None:
+                _send_udp(udp_sock, udp_dest, distance_mm, red_pos, blue_pos)
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or key == 27:
                 break
@@ -485,6 +527,8 @@ def run():
     finally:
         csv_file.flush()
         csv_file.close()
+        if udp_sock is not None:
+            udp_sock.close()
         pipeline.stop()
         cv2.destroyAllWindows()
         logger.info("計測終了")
