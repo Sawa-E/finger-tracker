@@ -112,6 +112,11 @@ filter:
 display:
   fps_target: 30       # 表示 FPS 目標
 
+udp:
+  host: "127.0.0.1"      # teleop-hand の IP アドレス
+  port: 50000             # teleop-hand の受信ポート
+  enabled: true           # false で送信を無効化
+
 capture:
   output_dir: data/images  # キャプチャ画像の保存先
   prefix: frame            # ファイル名のプレフィックス
@@ -136,4 +141,5 @@ model_path = config["model"]["path"]
 
 - [002-depth-measurement-logic.md](./002-depth-measurement-logic.md) — カルマンフィルタ Q/R、HSV フィルタ
 - [005-realtime-display.md](./005-realtime-display.md) — FPS 目標、表示設定
+- [010-udp-publisher.md](./010-udp-publisher.md) — UDP 送信設定
 - [初期仕様書](../../archive/initial_plan.md)
