@@ -6,7 +6,7 @@ RealSense D435i と YOLOv8-nano による指間距離リアルタイム計測シ
 
 赤・青のシリコン製指サック（カラーマーカー）を YOLOv8-nano で検出し、RealSense D435i の深度データから 3D 空間上の指間距離をリアルタイムに計測します。
 
-将来的にはロボットハンドの遠隔操作指令値として使用し、バイラテラルテレオペレーションシステムへの発展を目指しています。
+計測データは UDP で [teleop-hand](https://github.com/Sawa-E/teleop-hand)（C++ リアルタイム制御システム）に送信され、1-DOF ロボットハンドの遠隔操作指令値として使用されます。
 
 ## 処理フロー
 
@@ -24,7 +24,9 @@ RealSense D435i
                                 ↓
               フィルタ済み座標間のユークリッド距離 = 指間距離
                                 ↓
-              OpenCV表示 + CSV記録
+                    ┌───────────┼───────────┐
+                    ↓           ↓           ↓
+              OpenCV表示    CSV記録    UDP送信 → teleop-hand
 ```
 
 ## 必要環境
@@ -106,16 +108,7 @@ python -m finger_tracker.training
 
 YOLOv8-nano を fine-tuning します。学習の進捗はコンソールに表示されます。
 
-**学習パラメータ**（`config.yaml` で変更可能）:
-- エポック数: 100（Early stopping: patience=50）
-- バッチサイズ: 16
-- 入力サイズ: 640x640
-- データ拡張: Roboflow 側で実施済みのため無効
-
-**学習完了後の出力**:
-- `models/best.pt` — 最良の検出モデル（自動配置）
-- `runs/` — ultralytics の学習ログ・メトリクス
-- コンソールに mAP50 の評価結果を表示（目標: >= 0.90）
+学習完了後、`models/best.pt` にモデルが自動配置されます。`runs/` に学習ログ・メトリクスが出力されます。目標精度は mAP50 >= 0.90 です。
 
 ### 4. リアルタイム計測
 
@@ -152,7 +145,41 @@ python -m finger_tracker.detection
 - `ERROR: モデルファイルが見つかりません` — `models/best.pt` を配置してください
 - `ERROR: RealSense D435i が見つかりません` — USB 接続を確認してください
 
-### 5. 計測結果の確認
+### 5. teleop-hand 連携
+
+detection モジュールは毎フレーム、計測データを UDP で teleop-hand に送信します。
+
+```
+finger-tracker (Python)                    teleop-hand (C++)
+─────────────────────                      ─────────────────
+detection ループ (30Hz)                    recv_command (10kHz ポーリング)
+    │                                          │
+    ├─ distance_mm                             │
+    ├─ red_x, red_y, red_z      sendto        │
+    ├─ blue_x, blue_y, blue_z  ───────→  recvfrom (UDP:50000)
+    │   28 bytes, little-endian                │
+    │                                          ├─ 逆運動学 → θ_cmd
+    │                                          ├─ PD + DOB 制御
+    │                                          └─ DA ボード出力
+```
+
+**パケット形式**: 28 バイト、リトルエンディアン float32 x 7
+
+| オフセット | 型 | フィールド | 説明 |
+|-----------|-----|-----------|------|
+| 0 | float32 | `distance_mm` | 指間距離 [mm]。検出失敗時は `-1.0` |
+| 4 | float32 | `red_x` | 親指 X 座標 [m] |
+| 8 | float32 | `red_y` | 親指 Y 座標 [m] |
+| 12 | float32 | `red_z` | 親指 Z 座標 [m] |
+| 16 | float32 | `blue_x` | 人差指 X 座標 [m] |
+| 20 | float32 | `blue_y` | 人差指 Y 座標 [m] |
+| 24 | float32 | `blue_z` | 人差指 Z 座標 [m] |
+
+**起動順序**: finger-tracker と teleop-hand はどちらを先に起動しても動作します（UDP の性質上、受信者不在でも送信側はエラーになりません）。
+
+**送信を無効にする場合**: `config.yaml` で `udp.enabled: false` に設定してください。teleop-hand なしで finger-tracker を単体で使用する場合に有用です。
+
+### 6. 計測結果の確認
 
 計測を実行すると、`logs/` ディレクトリに2種類のファイルが自動生成されます。
 
@@ -193,56 +220,93 @@ df["distance_mm"].plot()  # 距離の時系列グラフ
 
 モデルロード、計測開始/終了、フレーム取得失敗、エラー等の情報が記録されます。問題発生時のデバッグに使用します。
 
-## 設定
+## 設定リファレンス
 
-すべての設定パラメータは `config.yaml` で管理されています。
+すべての設定は `config.yaml` で管理されています（コード内ハードコードなし）。現在の設定値は `python -m finger_tracker.config` で確認できます。
 
-```yaml
-camera:
-  width: 1280         # RGB・深度の解像度（横）
-  height: 720         # RGB・深度の解像度（縦）
-  fps: 30             # フレームレート
+### camera — RealSense カメラ設定
 
-model:
-  path: models/best.pt  # 学習済みモデルのパス
-  confidence: 0.5       # YOLO 検出の信頼度閾値
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `width` | `1280` | RGB・深度ストリームの横解像度 [px] |
+| `height` | `720` | RGB・深度ストリームの縦解像度 [px] |
+| `fps` | `30` | フレームレート [Hz]。カルマンフィルタの dt にも使用 |
 
-hsv:                    # HSV 色フィルタの閾値
-  red:
-    lower: [0, 120, 70]
-    upper: [10, 255, 255]
-    lower2: [170, 120, 70]    # 赤は色相が 0 と 180 で分裂するため2範囲
-    upper2: [180, 255, 255]
-  blue:
-    lower: [100, 120, 70]
-    upper: [130, 255, 255]
+> D435i は 1280x720@30fps / 640x480@60fps 等に対応。解像度を下げると処理が軽くなりますが、小さい指サックの検出精度が下がります。
 
-filter:
-  kalman_q: 0.01       # カルマンフィルタのプロセスノイズ（大きい→追従性↑ノイズ↑）
-  kalman_r: 0.1        # カルマンフィルタの観測ノイズ（大きい→安定性↑追従遅れ↑）
-  depth_timeout: 0.5   # 深度値の直前値保持タイムアウト（秒）
+### model — YOLOv8 推論設定
 
-display:
-  fps_target: 30       # 表示 FPS 目標
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `path` | `models/best.pt` | 学習済みモデルファイルのパス |
+| `confidence` | `0.5` | 検出信頼度の閾値。これ未満の検出は無視される |
 
-capture:
-  output_dir: data/images  # キャプチャ画像の保存先
-  prefix: frame            # ファイル名プレフィックス
+> `confidence` を下げると検出漏れが減りますが、誤検出が増えます。照明が安定した環境では `0.5`〜`0.7` が推奨です。
 
-training:
-  dataset: data/datasets/finger-cots-v1/data.yaml
-  epochs: 100
-  patience: 50
-  batch: 16
-  imgsz: 640
-  base_model: yolov8n.pt
-```
+### hsv — HSV 色フィルタ閾値
 
-現在の設定値を確認:
+YOLO の BB 内で色フィルタを適用し、指サックのマスク重心を求めます。HSV 値は `[H, S, V]` の配列で指定します。
 
-```bash
-python -m finger_tracker.config
-```
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `red.lower` | `[0, 120, 70]` | 赤の HSV 下限（色相 0〜10 の範囲） |
+| `red.upper` | `[10, 255, 255]` | 赤の HSV 上限 |
+| `red.lower2` | `[170, 120, 70]` | 赤の HSV 下限 2（色相 170〜180 の範囲） |
+| `red.upper2` | `[180, 255, 255]` | 赤の HSV 上限 2 |
+| `blue.lower` | `[100, 120, 70]` | 青の HSV 下限 |
+| `blue.upper` | `[130, 255, 255]` | 青の HSV 上限 |
+
+> **赤が2範囲ある理由**: OpenCV の HSV 色相は 0〜180 で、赤は 0 付近と 180 付近に分裂します。両方の範囲を OR で結合してマスクを生成します。
+>
+> **チューニング方法**: 照明環境が変わって検出が不安定な場合、S（彩度）と V（明度）の下限を調整してください。暗い環境では `V` を下げ（例: `50`）、蛍光灯下では `S` を上げる（例: `150`）と改善することがあります。
+
+### filter — カルマンフィルタ・深度フィルタ設定
+
+各指サックの 3D 座標を独立にカルマンフィルタ（等速度モデル、6D 状態 `[x,y,z,vx,vy,vz]`）で追跡します。
+
+| パラメータ | デフォルト | 説明 | 大きくすると | 小さくすると |
+|-----------|-----------|------|-------------|-------------|
+| `kalman_q` | `0.01` | プロセスノイズ。システムの不確実性 | 追従性↑ ノイズ↑ | 安定性↑ 追従遅れ↑ |
+| `kalman_r` | `0.1` | 観測ノイズ。センサの不確実性 | 安定性↑ 追従遅れ↑ | 追従性↑ ノイズ↑ |
+| `depth_timeout` | `0.5` | 深度欠損時に直前値を保持する時間 [秒] | 欠損耐性↑ 古い値のリスク↑ | 即座に欠損扱い |
+
+> **チューニングの目安**: 指を素早く動かす用途では `kalman_q` を大きく（例: `0.05`）、静止計測では小さく（例: `0.005`）します。`kalman_r` はセンサの深度ノイズに応じて調整し、通常は `0.05`〜`0.2` の範囲です。
+
+### udp — teleop-hand 通信設定
+
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `host` | `"127.0.0.1"` | teleop-hand の IP アドレス |
+| `port` | `50000` | teleop-hand の受信ポート（`config/comm.json` と一致させる） |
+| `enabled` | `true` | `false` で UDP 送信を無効化 |
+
+> teleop-hand なしで finger-tracker を単体利用する場合は `enabled: false` に設定してください。`true` のままでも受信者不在ではエラーにはなりません。
+
+### display — 表示設定
+
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `fps_target` | `30` | 表示 FPS の目標値 |
+
+### capture — データ収集設定
+
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `output_dir` | `data/images` | キャプチャ画像の保存先ディレクトリ |
+| `prefix` | `frame` | ファイル名のプレフィックス（`{prefix}_001_rgb.png`） |
+
+### training — モデル学習設定
+
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| `dataset` | `data/datasets/finger-cots-v1/data.yaml` | データセット定義ファイルのパス |
+| `epochs` | `100` | 最大エポック数 |
+| `patience` | `50` | Early stopping の許容エポック数（改善がなければ停止） |
+| `batch` | `16` | バッチサイズ |
+| `imgsz` | `640` | 入力画像サイズ [px] |
+| `base_model` | `yolov8n.pt` | fine-tuning のベースモデル |
+
+> データ拡張は Roboflow のエクスポート時に適用済みのため、ultralytics 側の augmentation は無効にしています。
 
 ## プロジェクト構造
 
@@ -258,7 +322,7 @@ finger-tracker/
 │   ├── config/              # 設定管理（YAML読み込み + デフォルト値マージ）
 │   ├── capture/             # RealSense 画像キャプチャ
 │   ├── training/            # YOLOv8-nano fine-tuning + 評価 + モデル配置
-│   └── detection/           # 推論 + HSVフィルタ + 3D距離計測 + カルマンフィルタ + 表示 + CSV記録
+│   └── detection/           # 推論 + HSVフィルタ + 3D距離計測 + カルマンフィルタ + 表示 + CSV記録 + UDP送信
 ├── data/                    # 学習データ（git管理外）
 │   ├── images/              # キャプチャ画像（RGB PNG + 深度 .npy）
 │   └── datasets/            # Roboflow エクスポート（YOLO形式）
@@ -285,8 +349,9 @@ finger-tracker/
 | ドキュメント | 内容 |
 |-------------|------|
 | [REPORT.md](REPORT.md) | 開発報告書（detection モジュールの理論詳説含む） |
-| [docs/design/decisions/](docs/design/decisions/) | ADR（アーキテクチャ決定記録）001〜009 |
+| [docs/design/decisions/](docs/design/decisions/) | ADR（アーキテクチャ決定記録）001〜010 |
 | [docs/status/implementation.md](docs/status/implementation.md) | 実装ステータス |
+| [docs/status/roadmap.md](docs/status/roadmap.md) | ロードマップ |
 
 ## ライセンス
 
